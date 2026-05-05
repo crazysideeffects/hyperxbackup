@@ -1,0 +1,2 @@
+pip install scapy
+python slave_cracker.py 192.168.1.100 --cores 8

